@@ -44,11 +44,50 @@ def validate_systems(data):
         out.append({'id': uuid(item['id']), 'name': text(item['name']), 'visibility': item['visibility'], 'roomName': None if item['roomName'] is None else text(item['roomName'])})
     return expiry, out
 
+def sanitize_drawing(value):
+    """Copy a bounded drawing, or omit it when any recognized field is invalid."""
+    try:
+        if not isinstance(value, dict) or value['rackKind'] not in ('amp', 'phono', 'tt', 'src', 'spk', 'sub', 'dac'):
+            return None
+        result = {'rackKind': value['rackKind']}
+        def bounded_number(v, maximum):
+            if type(v) not in (int, float) or not math.isfinite(v) or not .01 <= v <= maximum:
+                raise ValueError('Invalid drawing number')
+            return v
+        def bounded_text(v):
+            if not isinstance(v, str) or not 1 <= len(v) <= 80:
+                raise ValueError('Invalid drawing text')
+            return v
+        for key in ('widthCm', 'heightCm', 'depthCm'):
+            if key in value: result[key] = bounded_number(value[key], 1000)
+        for key in ('floorstanding', 'active'):
+            if key in value:
+                if type(value[key]) is not bool: raise ValueError('Invalid drawing boolean')
+                result[key] = value[key]
+        if 'bassAlignment' in value: result['bassAlignment'] = bounded_text(value['bassAlignment'])
+        if 'drivers' in value:
+            drivers = value['drivers']
+            if not isinstance(drivers, list) or len(drivers) > 16: raise ValueError('Invalid drivers')
+            result['drivers'] = []
+            for driver in drivers:
+                count = driver['count']
+                if type(count) is not int or not 1 <= count <= 32: raise ValueError('Invalid driver count')
+                clean = {'role': bounded_text(driver['role']), 'size': bounded_number(driver['size'], 100), 'count': count}
+                for key in ('type', 'face'):
+                    if key in driver: clean[key] = bounded_text(driver[key])
+                result['drivers'].append(clean)
+        return result
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
 def _validate_snapshot(value):
     if not isinstance(value, dict) or type(value.get('version')) is not int or value.get('version') != 1: raise ValueError('Invalid snapshot')
     system = value['system']; components = system['components']; rack = system['rack']
     if not isinstance(components, list) or len(components) > 64 or not isinstance(rack, list) or len(rack) > 32: raise ValueError('Invalid equipment')
     items = [{'id': text(x['id']), 'label': text(x['label']), 'role': text(x['role']), 'quantity': quantity(x['quantity'])} for x in components]
+    for source, item in zip(components, items):
+        drawing = sanitize_drawing(source.get('drawing'))
+        if drawing is not None: item['drawing'] = drawing
     ids = {x['id'] for x in items}
     if len(ids) != len(items): raise ValueError('Duplicate component')
     rows = []

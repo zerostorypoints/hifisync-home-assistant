@@ -96,3 +96,17 @@ class ScopeProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cache.status, 'select_system'); self.assertTrue(cache.transient)
         api.offline = False; await cache.refresh()
         self.assertEqual(cache.status, 'select_system'); self.assertFalse(cache.transient)
+
+class DrawingTests(unittest.TestCase):
+    def test_valid_drawing_is_copied_and_unknown_fields_removed(self):
+        import copy
+        snap = copy.deepcopy(SNAPSHOT)
+        snap['system']['components'] = [{'id':'a','label':'Speaker','role':'speaker','quantity':1,'drawing':{'rackKind':'spk','widthCm':20,'heightCm':100,'depthCm':30,'floorstanding':True,'active':False,'bassAlignment':'ported','drivers':[{'role':'woofer','size':16.5,'count':2,'type':'cone','face':'front','secret':'x'}],'secret':'x'}}]
+        result = validate_snapshot(snap)['system']['components'][0]['drawing']
+        self.assertEqual(result, {'rackKind':'spk','widthCm':20,'heightCm':100,'depthCm':30,'floorstanding':True,'active':False,'bassAlignment':'ported','drivers':[{'role':'woofer','size':16.5,'count':2,'type':'cone','face':'front'}]})
+
+    def test_malformed_drawing_is_omitted_without_losing_snapshot(self):
+        import copy
+        for drawing in [{'widthCm':20}, {'rackKind':'spk','widthCm':0}, {'rackKind':'spk','active':1}, {'rackKind':'spk','drivers':[{'role':'x','size':1,'count':33}]}, {'rackKind':'spk','drivers':[{}]*17}, {'rackKind':'spk','bassAlignment':'x'*81}]:
+            snap = copy.deepcopy(SNAPSHOT); snap['system']['components'] = [{'id':'a','label':'A','role':'speaker','quantity':1,'drawing':drawing}]
+            with self.subTest(drawing=drawing): self.assertNotIn('drawing', validate_snapshot(snap)['system']['components'][0])
