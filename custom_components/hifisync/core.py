@@ -77,38 +77,56 @@ class Cache:
     def __init__(self, api, system_id, player_id, now=lambda: datetime.now(timezone.utc), token_expiry=None):
         self.api, self.system_id, self.player_id, self.now = api, system_id, player_id, now
         self.token_expiry = token_expiry
+        self.player_available = True; self.transient = False
         self.generation = 0; self.snapshot = None; self.valid_until = None; self.stale = False; self.status = 'loading' if system_id else 'select_system'; self._task = None
     def select(self, system_id, player_id):
         self.generation += 1; self.system_id = system_id; self.player_id = player_id; self.snapshot = None; self.valid_until = None; self.status = 'loading' if system_id else 'select_system'
     def read(self, player_id):
         if player_id != self.player_id or not self.snapshot or self.now() >= self.valid_until: return None
         return {'snapshot': deepcopy(self.snapshot), 'stale': self.stale, 'validUntil': self.valid_until.isoformat()}
-    async def refresh(self):
+    async def refresh(self, player_available=True):
+        if self.player_available != player_available:
+            self.player_available = player_available
+            self.generation += 1; self.snapshot = None; self.valid_until = None
+        if self.status == 'reauth': return
         if self.token_expiry and self.now() >= self.token_expiry:
-            self.generation += 1; self.snapshot = None; self.status = 'reauth'
+            self.generation += 1; self.snapshot = None; self.transient = False; self.status = 'reauth'
             return
-        if not self.system_id: return
         if self._task and not self._task.done():
             if self._task_generation == self.generation: return await asyncio.shield(self._task)
         generation = self.generation; system = self.system_id
         self._task_generation = generation
-        self._task = asyncio.create_task(self._refresh(generation, system))
+        self._task = asyncio.create_task(self._refresh(generation, system, player_available))
         return await asyncio.shield(self._task)
-    async def _refresh(self, generation, system):
+    async def _refresh(self, generation, system, player_available):
+        probe = not system or not player_available
         try:
-            data = await self.api.detail(system)
-            expiry = date(data['expiresAt']); snapshot = validate_snapshot(data['snapshot'])
-            if snapshot['system']['id'] != system or expiry <= self.now(): raise ValueError('Invalid selection or expiry')
+            if probe:
+                expiry, _systems = await self.api.systems()
+                if expiry <= self.now(): raise Unauthorized()
+            else:
+                data = await self.api.detail(system)
+                expiry = date(data['expiresAt']); snapshot = validate_snapshot(data['snapshot'])
+                if snapshot['system']['id'] != system or expiry <= self.now(): raise ValueError('Invalid selection or expiry')
         except Unauthorized:
             if generation == self.generation:
-                self.snapshot = None; self.status = 'reauth'
+                self.snapshot = None; self.transient = False; self.status = 'reauth'
         except Missing:
             if generation == self.generation:
-                self.snapshot = None; self.system_id = None; self.status = 'select_system'
+                self.snapshot = None
+                if probe:
+                    self.transient = True; self.status = 'select_player' if not player_available else 'select_system'
+                else:
+                    self.system_id = None; self.transient = False; self.status = 'select_system'
         except (Transient, ValueError, KeyError, TypeError):
             if generation == self.generation:
-                self.stale = True; self.status = 'reauth' if self.token_expiry and self.now() >= self.token_expiry else 'unavailable'
+                self.transient = True; self.stale = True
+                self.status = 'reauth' if self.token_expiry and self.now() >= self.token_expiry else ('select_player' if not player_available else ('select_system' if not system else 'unavailable'))
                 if self.status == 'reauth': self.snapshot = None
         else:
             if generation == self.generation:
-                self.token_expiry = expiry; self.snapshot = snapshot; self.valid_until = min(expiry, self.now() + timedelta(hours=1)); self.stale = False; self.status = 'ready'
+                self.token_expiry = expiry; self.transient = False; self.stale = False
+                if probe:
+                    self.snapshot = None; self.status = 'select_player' if not player_available else 'select_system'
+                else:
+                    self.snapshot = snapshot; self.valid_until = min(expiry, self.now() + timedelta(hours=1)); self.status = 'ready'

@@ -1,4 +1,5 @@
 """HiFiSync integration for ordinary Home Assistant installations."""
+import asyncio
 import logging
 from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
@@ -21,28 +22,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     last_attempt = None
     retry_minutes = 5
     failures = 0
-    async def refresh():
+    refresh_lock = asyncio.Lock()
+    async def refresh(force=False):
         nonlocal last_attempt, retry_minutes, failures
-        if not registry.async_get(cache.player_id):
-            if cache.token_expiry and cache.now() >= cache.token_expiry:
-                cache.select(cache.system_id, cache.player_id)
-                cache.status = 'reauth'
-                entry.async_start_reauth(hass)
-                async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
+        async with refresh_lock:
+            if not force and last_attempt is not None and cache.now() - last_attempt < timedelta(minutes=retry_minutes):
                 return
-            cache.select(cache.system_id, cache.player_id)
-            cache.status = 'select_player'
+            last_attempt = cache.now()
+            available = registry.async_get(cache.player_id) is not None
+            await cache.refresh(player_available=available)
+            failures = failures + 1 if cache.transient else 0
+            retry_minutes = min(5, 2 ** min(failures - 1, 3)) if failures else 5
+            if cache.status == 'reauth':
+                # Home Assistant deduplicates active reauthentication flows.
+                entry.async_start_reauth(hass)
+            elif cache.status == 'select_system' and entry.data.get('system_id'):
+                hass.config_entries.async_update_entry(entry, data={**entry.data, 'system_id': None})
             async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
-            return
-        last_attempt = cache.now()
-        await cache.refresh()
-        failures = failures + 1 if cache.status == 'unavailable' else 0
-        retry_minutes = min(5, 2 ** min(failures - 1, 3)) if failures else 5
-        if cache.status == 'reauth':
-            entry.async_start_reauth(hass)
-        elif cache.status == 'select_system' and entry.data.get('system_id'):
-            hass.config_entries.async_update_entry(entry, data={**entry.data, 'system_id': None})
-        async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
     def provider(entity_id):
         entity = registry.async_get(entity_id)
         if not entity or entity.domain != 'media_player' or entity.id != cache.player_id:
@@ -50,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         return cache.read(entity.id)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = cache
     hass.data[DOMAIN][PROVIDER] = provider
-    await refresh()
+    await refresh(force=True)
     async def tick(_now):
         if last_attempt is None or cache.now() - last_attempt >= timedelta(minutes=retry_minutes): await refresh()
     entry.async_on_unload(async_track_time_interval(hass, tick, timedelta(minutes=1)))
@@ -64,9 +60,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     entry.async_on_unload(hass.bus.async_listen(EVENT_STATE_CHANGED, state_changed))
     @callback
     def registry_changed(event):
-        if not registry.async_get(cache.player_id):
+        if not registry.async_get(cache.player_id) and cache.player_available:
+            reauth = cache.status == 'reauth'
             cache.select(cache.system_id, cache.player_id)
-            cache.status = 'select_player'
+            cache.player_available = False
+            cache.status = 'reauth' if reauth else 'select_player'
             async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
     entry.async_on_unload(hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, registry_changed))
     await hass.config_entries.async_forward_entry_setups(entry, ['sensor'])

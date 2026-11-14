@@ -85,3 +85,46 @@ async def test_unauthorized_starts_reauth_and_replacement_restores_selection(has
         await hass.async_block_till_done()
         assert entry.data['system_id'] == SYSTEM
         assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is not None
+
+async def test_token_form_masks_credential(hass, enable_custom_integrations):
+    from homeassistant.helpers.selector import TextSelector
+    result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+    validator = next(iter(result['data_schema'].schema.values()))
+    assert isinstance(validator, TextSelector)
+    assert validator.config['type'] == 'password'
+
+@pytest.mark.parametrize('missing_player', [False, True])
+async def test_scheduled_probe_detects_revocation_without_selection_or_player(hass, enable_custom_integrations, missing_player):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+    from custom_components.hifisync.core import Unauthorized, Missing
+    class MutableClient(FixtureClient):
+        revoked = False
+        deleted = not missing_player
+        async def _get(self, path):
+            if self.revoked: raise Unauthorized()
+            if path != '/systems' and self.deleted: raise Missing()
+            return await super()._get(path)
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', MutableClient), patch('custom_components.hifisync.Client', MutableClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        cache = hass.data['hifisync'][entry.entry_id]
+        if missing_player:
+            registry.async_remove(player.entity_id)
+            await hass.async_block_till_done()
+        else:
+            assert entry.data['system_id'] is None
+        cache.api.revoked = True
+        future = dt_util.utcnow() + timedelta(minutes=6)
+        cache.now = lambda: future
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert cache.status == 'reauth'
+        flows = [f for f in hass.config_entries.flow.async_progress() if f['context']['source'] == 'reauth']
+        assert len(flows) == 1

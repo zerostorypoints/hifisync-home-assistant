@@ -2,6 +2,7 @@
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .client import Client
 from .const import DOMAIN
@@ -41,7 +42,7 @@ class HiFiSyncFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_select()
             except Unauthorized: errors['base'] = 'invalid_auth'
             except (Transient, Missing, ValueError, KeyError, TypeError): errors['base'] = 'cannot_connect'
-        return self.async_show_form(step_id=step, data_schema=vol.Schema({vol.Required('token'): str}), errors=errors)
+        return self.async_show_form(step_id=step, data_schema=vol.Schema({vol.Required('token'): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))}), errors=errors)
     async def async_step_reauth(self, entry_data):
         self.entry = self.hass.config_entries.async_get_entry(self.context['entry_id'])
         return await self.async_step_reauth_confirm()

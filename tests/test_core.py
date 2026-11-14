@@ -57,3 +57,42 @@ class ExpiryTests(unittest.IsolatedAsyncioTestCase):
         current[0] += timedelta(minutes=2)
         await cache.refresh()
         self.assertEqual(cache.status, 'reauth')
+
+class ScopeProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unselected_token_revocation_is_detected(self):
+        class Api:
+            async def systems(self): raise Unauthorized()
+        cache = Cache(Api(), None, 'player', lambda: NOW)
+        await cache.refresh()
+        self.assertEqual(cache.status, 'reauth')
+
+    async def test_missing_player_still_checks_token_without_loading_snapshot(self):
+        class Api:
+            async def systems(self): return NOW + timedelta(days=1), []
+            async def detail(self, _): raise AssertionError('no snapshot for an unmapped player')
+        cache = Cache(Api(), SNAPSHOT['system']['id'], 'player', lambda: NOW)
+        await cache.refresh(player_available=False)
+        self.assertEqual(cache.status, 'select_player')
+        self.assertIsNone(cache.read('player'))
+
+    async def test_scope_probe_is_single_flight_and_cannot_restore_superseded_selection(self):
+        class Api:
+            def __init__(self): self.calls = 0; self.future = asyncio.get_running_loop().create_future()
+            async def systems(self): self.calls += 1; return await self.future
+        api = Api(); cache = Cache(api, None, 'player', lambda: NOW)
+        a = asyncio.create_task(cache.refresh()); b = asyncio.create_task(cache.refresh()); await asyncio.sleep(0); await asyncio.sleep(0)
+        self.assertEqual(api.calls, 1)
+        cache.select('replacement', 'player'); api.future.set_result((NOW + timedelta(days=1), [])); await asyncio.gather(a, b)
+        self.assertEqual(cache.system_id, 'replacement'); self.assertEqual(cache.status, 'loading')
+
+    async def test_scope_probe_transient_preserves_selection_status_and_recovers(self):
+        class Api:
+            offline = True
+            async def systems(self):
+                if self.offline: raise Transient()
+                return NOW + timedelta(days=1), []
+        api = Api(); cache = Cache(api, None, 'player', lambda: NOW)
+        await cache.refresh()
+        self.assertEqual(cache.status, 'select_system'); self.assertTrue(cache.transient)
+        api.offline = False; await cache.refresh()
+        self.assertEqual(cache.status, 'select_system'); self.assertFalse(cache.transient)

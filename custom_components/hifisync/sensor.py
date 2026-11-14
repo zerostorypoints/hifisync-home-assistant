@@ -1,5 +1,6 @@
 """Expose link readiness without recording room or equipment data."""
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_time_interval
 from datetime import timedelta
@@ -19,4 +20,7 @@ class Readiness(SensorEntity):
         return self.cache.status
     async def async_added_to_hass(self):
         self.async_on_remove(async_dispatcher_connect(self.hass, f"{DOMAIN}_status_{self.entry_id}", self.async_write_ha_state))
-        self.async_on_remove(async_track_time_interval(self.hass, lambda _: self.async_write_ha_state(), timedelta(minutes=1)))
+        @callback
+        def update(_):
+            self.async_write_ha_state()
+        self.async_on_remove(async_track_time_interval(self.hass, update, timedelta(minutes=1)))
