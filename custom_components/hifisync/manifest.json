@@ -1,1 +1,13 @@
-{"domain":"hifisync","name":"HiFiSync","version":"0.1.0","config_flow":true,"documentation":"https://github.com/piotr-dziubecki/hifisync-home-assistant","iot_class":"cloud_polling","requirements":[]}
+{
+  "domain": "hifisync",
+  "name": "HiFiSync",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/piotr-dziubecki/hifisync-home-assistant",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "issue_tracker": "https://github.com/piotr-dziubecki/hifisync-home-assistant/issues",
+  "codeowners": [
+    "@piotr-dziubecki"
+  ]
+}

@@ -128,3 +128,39 @@ async def test_scheduled_probe_detects_revocation_without_selection_or_player(ha
         assert cache.status == 'reauth'
         flows = [f for f in hass.config_entries.flow.async_progress() if f['context']['source'] == 'reauth']
         assert len(flows) == 1
+
+async def test_scope_loss_clears_saved_system_while_player_missing(hass, enable_custom_integrations):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+    class ScopedClient(FixtureClient):
+        selected_available = True
+        async def _get(self, path):
+            if path == '/systems' and not self.selected_available:
+                return {'expiresAt': '2099-01-01T00:00:00Z', 'systems': []}
+            return await super()._get(path)
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', ScopedClient), patch('custom_components.hifisync.Client', ScopedClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        cache = hass.data['hifisync'][entry.entry_id]
+        registry.async_remove(player.entity_id)
+        await hass.async_block_till_done()
+        future = dt_util.utcnow() + timedelta(minutes=6)
+        cache.now = lambda: future
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert entry.data['system_id'] == SYSTEM
+        cache.api.selected_available = False
+        future += timedelta(minutes=6)
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert cache.status == 'select_player'
+        assert cache.system_id is None
+        assert entry.data['system_id'] is None
+        assert entry.data['token'] == 'synthetic-token'
+        assert entry.data['player_registry_id'] == player.id

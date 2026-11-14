@@ -36,7 +36,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             if cache.status == 'reauth':
                 # Home Assistant deduplicates active reauthentication flows.
                 entry.async_start_reauth(hass)
-            elif cache.status == 'select_system' and entry.data.get('system_id'):
+            elif cache.status in ('select_system', 'select_player') and cache.system_id is None and entry.data.get('system_id'):
                 hass.config_entries.async_update_entry(entry, data={**entry.data, 'system_id': None})
             async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
     def provider(entity_id):

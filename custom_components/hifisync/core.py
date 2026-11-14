@@ -127,6 +127,7 @@ class Cache:
             if generation == self.generation:
                 self.token_expiry = expiry; self.transient = False; self.stale = False
                 if probe:
+                    if system and not any(item['id'] == system for item in _systems): self.system_id = None
                     self.snapshot = None; self.status = 'select_player' if not player_available else 'select_system'
                 else:
                     self.snapshot = snapshot; self.valid_until = min(expiry, self.now() + timedelta(hours=1)); self.status = 'ready'
