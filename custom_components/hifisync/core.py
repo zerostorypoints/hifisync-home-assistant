@@ -103,7 +103,8 @@ def _validate_snapshot(value):
         for p in placements:
             if p['role'] not in ('left', 'right', 'subwoofer', 'listening'): raise ValueError('Invalid role')
             points.append({'role': p['role'], 'xM': number(p['xM'], 0, w), 'yM': number(p['yM'], 0, length), 'rotationDeg': number(p['rotationDeg'], -360, 360, True)})
-        room = {'name': text(room['name']), 'widthM': w, 'lengthM': length, 'heightM': number(room['heightM'], .01, 200, True), 'placements': points}
+        room_id = {'id': uuid(room['id']).lower()} if 'id' in room else {}
+        room = {**room_id, 'name': text(room['name']), 'widthM': w, 'lengthM': length, 'heightM': number(room['heightM'], .01, 200, True), 'placements': points}
     return {'version': 1, 'revision': text(value['revision']), 'system': {'id': uuid(system['id']), 'name': text(system['name']), 'components': items, 'rack': rows}, 'room': room}
 
 def validate_snapshot(value):

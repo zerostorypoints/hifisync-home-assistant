@@ -62,6 +62,18 @@ class CacheTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError): validate_snapshot({'version':1})
 
 class BoundsTests(unittest.TestCase):
+    def test_room_identity_is_optional_and_validated(self):
+        room = {'name': 'Listening room', 'widthM': 4, 'lengthM': 6, 'heightM': None, 'placements': []}
+        room_id = '12345678-1234-1234-1234-123456789abc'
+        self.assertEqual(validate_snapshot({**SNAPSHOT, 'room': room})['room'], room)
+        self.assertEqual(
+            validate_snapshot({**SNAPSHOT, 'room': {**room, 'id': room_id.upper()}})['room'],
+            {**room, 'id': room_id},
+        )
+        for invalid in (None, 42, room_id.replace('-', ''), 'not-a-room-id'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_snapshot({**SNAPSHOT, 'room': {**room, 'id': invalid}})
+
     def test_rejects_contract_excess_and_boolean_version(self):
         import copy
         for mutate in [lambda x: x.update(version=True), lambda x: x['system'].update(components=[{'id':str(i),'label':'x','role':'amplifier','quantity':1} for i in range(65)]), lambda x: x['system'].update(components=[{'id':'x','label':'x','role':'amplifier','quantity':1.5}]), lambda x: x.update(room={'name':'r','widthM':201,'lengthM':2,'heightM':None,'placements':[]}), lambda x: x.update(room={'name':'r','widthM':2,'lengthM':2,'heightM':None,'placements':[{'role':'left','xM':1,'yM':1,'rotationDeg':0}]*17})]:
