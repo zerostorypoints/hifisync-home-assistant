@@ -33,11 +33,18 @@ async def test_setup_rename_and_replacement(hass, enable_custom_integrations):
         assert entry.state == config_entries.ConfigEntryState.LOADED
         provider = hass.data['hifisync']['studio_snapshot_v1']
         assert provider(player.entity_id)['snapshot']['system']['name'] == 'Stereo'
+        summary = hass.data['hifisync']['studio_link_v1']
+        hass.states.async_set(player.entity_id, 'idle')
+        expected = {'status': 'ready', 'systemName': 'Stereo', 'roomName': None}
+        assert summary(player.entity_id) == expected
         renamed = registry.async_update_entity(player.entity_id, new_entity_id='media_player.renamed')
         assert provider(renamed.entity_id) is not None
+        assert summary(renamed.entity_id) == expected
+        assert summary(player.entity_id) is None
         registry.async_remove(renamed.entity_id)
         replacement = registry.async_get_or_create('media_player', 'fixture', 'player2', suggested_object_id='renamed')
         assert provider(replacement.entity_id) is None
+        assert summary(replacement.entity_id) is None
 
 async def test_missing_system_allows_reselection_without_reauth(hass, enable_custom_integrations):
     from custom_components.hifisync.core import Missing
@@ -56,6 +63,9 @@ async def test_missing_system_allows_reselection_without_reauth(hass, enable_cus
         assert entry.state == config_entries.ConfigEntryState.LOADED
         assert entry.data['system_id'] is None
         assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is None
+        assert hass.data['hifisync']['studio_link_v1'](player.entity_id) == {
+            'status': 'select_system', 'systemName': None, 'roomName': None,
+        }
         assert not any(flow['context']['source'] == 'reauth' for flow in hass.config_entries.flow.async_progress())
         result = await hass.config_entries.flow.async_init('hifisync', context={'source': 'reconfigure', 'entry_id': entry.entry_id})
         assert result['step_id'] == 'select'
@@ -76,6 +86,10 @@ async def test_unauthorized_starts_reauth_and_replacement_restores_selection(has
         # Run the periodic callback through HA time tracking in separate tests; this exercises the actual refresh and auth flow.
         await cache.refresh()
         assert cache.status == 'reauth'
+        previous_summary = hass.data['hifisync']['studio_link_v1']
+        assert previous_summary(player.entity_id) == {
+            'status': 'reauth', 'systemName': None, 'roomName': None,
+        }
         entry.async_start_reauth(hass)
         await hass.async_block_till_done()
         flows = [f for f in hass.config_entries.flow.async_progress() if f['context']['source'] == 'reauth']
@@ -85,6 +99,12 @@ async def test_unauthorized_starts_reauth_and_replacement_restores_selection(has
         await hass.async_block_till_done()
         assert entry.data['system_id'] == SYSTEM
         assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is not None
+        summary = hass.data['hifisync']['studio_link_v1']
+        assert summary(player.entity_id) == {'status': 'ready', 'systemName': 'Stereo', 'roomName': None}
+        assert previous_summary(player.entity_id) is None
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert 'studio_link_v1' not in hass.data['hifisync']
+        assert summary(player.entity_id) is None
 
 async def test_token_form_masks_credential(hass, enable_custom_integrations):
     from homeassistant.helpers.selector import TextSelector

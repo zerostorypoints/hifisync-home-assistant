@@ -120,9 +120,38 @@ class Cache:
         self.generation = 0; self.snapshot = None; self.valid_until = None; self.stale = False; self.status = 'loading' if system_id else 'select_system'; self._task = None
     def select(self, system_id, player_id):
         self.generation += 1; self.system_id = system_id; self.player_id = player_id; self.snapshot = None; self.valid_until = None; self.status = 'loading' if system_id else 'select_system'
+
+    def _current_snapshot(self, player_id, now):
+        if not player_id or player_id != self.player_id or not self.snapshot or now >= self.valid_until:
+            return None
+        return self.snapshot
+
     def read(self, player_id):
-        if player_id != self.player_id or not self.snapshot or self.now() >= self.valid_until: return None
-        return {'snapshot': deepcopy(self.snapshot), 'stale': self.stale, 'validUntil': self.valid_until.isoformat()}
+        snapshot = self._current_snapshot(player_id, self.now())
+        if snapshot is None:
+            return None
+        return {'snapshot': deepcopy(snapshot), 'stale': self.stale, 'validUntil': self.valid_until.isoformat()}
+
+    def link(self, player_id):
+        """Read the matched player's presentation names and readiness."""
+        if not player_id or player_id != self.player_id:
+            return None
+        now = self.now()
+        status = self.status
+        snapshot = self._current_snapshot(player_id, now)
+        if self.token_expiry and now >= self.token_expiry:
+            status = 'reauth'
+        elif snapshot:
+            room = snapshot['room']
+            return {
+                'status': 'stale' if self.stale else 'ready',
+                'systemName': snapshot['system']['name'],
+                'roomName': room['name'] if room else None,
+            }
+        elif status == 'ready':
+            status = 'unavailable'
+        return {'status': status, 'systemName': None, 'roomName': None}
+
     async def refresh(self, player_available=True):
         if self.player_available != player_available:
             self.player_available = player_available

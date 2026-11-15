@@ -20,6 +20,31 @@ class CacheTests(unittest.IsolatedAsyncioTestCase):
         await self.cache.refresh(); self.api.result = Transient(); self.now += timedelta(minutes=10); await self.cache.refresh()
         self.assertTrue(self.cache.read('registry-1')['stale'])
         self.now += timedelta(minutes=51); self.assertIsNone(self.cache.read('registry-1'))
+    async def test_link_summary_contains_only_current_names_and_readiness(self):
+        player = 'registry-1'
+        self.api.result['snapshot'] = {
+            **SNAPSHOT,
+            'room': {
+                'name': 'Listening room',
+                'widthM': 4,
+                'lengthM': 6,
+                'heightM': 2.5,
+                'placements': [{'role': 'left', 'xM': 1, 'yM': 1, 'rotationDeg': 0}],
+            },
+        }
+        await self.cache.refresh()
+        names = {'systemName': 'Stereo', 'roomName': 'Listening room'}
+        empty = {'systemName': None, 'roomName': None}
+        self.assertEqual(self.cache.link(player), {'status': 'ready', **names})
+        self.assertIsNone(self.cache.link('another-player'))
+        self.api.result = Transient()
+        self.now += timedelta(minutes=10)
+        await self.cache.refresh()
+        self.assertEqual(self.cache.link(player), {'status': 'stale', **names})
+        self.now += timedelta(minutes=51)
+        self.assertEqual(self.cache.link(player), {'status': 'unavailable', **empty})
+        self.cache.select('another-system', player)
+        self.assertEqual(self.cache.link(player), {'status': 'loading', **empty})
     async def test_missing_selection_and_unauthorized_differ(self):
         await self.cache.refresh(); self.api.result = Missing(); await self.cache.refresh()
         self.assertIsNone(self.cache.system_id); self.assertEqual(self.cache.status, 'select_system'); self.assertIsNone(self.cache.read('registry-1'))
@@ -48,7 +73,9 @@ class ExpiryTests(unittest.IsolatedAsyncioTestCase):
     async def test_offline_known_token_expiry_requires_reauth(self):
         api = Fake(); api.result = {'expiresAt':'2026-01-01T00:02:00Z','snapshot':SNAPSHOT}
         current = [NOW]; cache = Cache(api, SNAPSHOT['system']['id'], 'registry-1', lambda:current[0])
-        await cache.refresh(); current[0] += timedelta(minutes=3); api.result = Transient(); await cache.refresh()
+        await cache.refresh(); current[0] += timedelta(minutes=3); api.result = Transient()
+        self.assertEqual(cache.link('registry-1'), {'status': 'reauth', 'systemName': None, 'roomName': None})
+        await cache.refresh()
         self.assertEqual(cache.status, 'reauth'); self.assertIsNone(cache.read('registry-1'))
 
     async def test_expiry_starts_reauth_even_without_selected_system(self):

@@ -10,7 +10,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from .client import Client, api_base
-from .const import DOMAIN, PROVIDER
+from .const import DOMAIN, LINK_PROVIDER, PROVIDER
 from .core import Cache, date
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,13 +42,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             elif cache.status in ('select_system', 'select_player') and cache.system_id is None and entry.data.get('system_id'):
                 hass.config_entries.async_update_entry(entry, data={**entry.data, 'system_id': None})
             async_dispatcher_send(hass, f"{DOMAIN}_status_{entry.entry_id}")
-    def provider(entity_id):
+    def matched_player_id(entity_id):
         entity = registry.async_get(entity_id)
         if not entity or entity.domain != 'media_player' or entity.id != cache.player_id:
             return None
-        return cache.read(entity.id)
+        return entity.id
+    def provider(entity_id):
+        return cache.read(matched_player_id(entity_id))
+    def link_provider(entity_id):
+        return cache.link(matched_player_id(entity_id))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = cache
     hass.data[DOMAIN][PROVIDER] = provider
+    hass.data[DOMAIN][LINK_PROVIDER] = link_provider
     await refresh(force=True)
     async def tick(_now):
         if last_attempt is None or cache.now() - last_attempt >= timedelta(minutes=retry_minutes): await refresh()
@@ -78,4 +83,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     data = hass.data[DOMAIN]; cache = data.pop(entry.entry_id)
     cache.select(None, None)
     data.pop(PROVIDER, None)
+    data.pop(LINK_PROVIDER, None)
     return True

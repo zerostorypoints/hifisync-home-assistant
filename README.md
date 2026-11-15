@@ -16,7 +16,11 @@ The token is stored in the Home Assistant config entry. Its snapshot stays in me
 
 Use the integration's **Configure** action to select a different system or player. The player's registry identity survives entity renames; if the entry is removed or replaced, configure the binding again. Deleting or unsharing the selected system clears the snapshot on the next successful validation and retains the token and player for reselection. Revoking or expiring the token clears the snapshot and starts Home Assistant reauthentication; paste a replacement token. A previous selection is restored only after the replacement token validates it. If it no longer has access, select a system again.
 
+In compatible Frame Studio, open **Sources → Music** and select the same player. The link summary shows the available system and room names while the player is idle or playing. Use **Show System and Room** to enable those screens for the panel. If the summary reports that the selection or token needs attention, use **Configure** or **Reauthenticate** on the HiFiSync integration in Home Assistant.
+
 Refresh runs every five minutes, on playback when due, and retries temporary errors with bounded backoff. When the selection or player is missing, an authenticated scope check continues so revocation is detected without restoring a snapshot. A last validated snapshot is marked stale on a temporary error and expires no later than one hour after validation or the token expiry, whichever comes first. Removing or unloading the integration drops the in-memory snapshot. Generic sensor state and recorder do not contain the system or room projection. Frame or another local consumer must independently enforce user permissions and local projection expiry.
+
+Local consumers can call `hass.data["hifisync"]["studio_link_v1"](entity_id)` to read the matched player's summary from memory. It returns `None` for other players and a mapping with `status`, `systemName` and `roomName` for the registered binding. Expired or unavailable data has null names. A locally valid snapshot retained after a temporary error has status `stale`.
 
 ## Development and release
 
