@@ -9,14 +9,17 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
-from .client import Client
+from .client import Client, api_base
 from .const import DOMAIN, PROVIDER
 from .core import Cache, date
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    api = Client(async_get_clientsession(hass), entry.data['token'])
+    api = Client(
+        async_get_clientsession(hass), entry.data['token'],
+        base=api_base(entry.data.get('site_url')),
+    )
     cache = Cache(api, entry.data.get('system_id'), entry.data['player_registry_id'], token_expiry=date(entry.data['token_expiry']))
     registry = er.async_get(hass)
     last_attempt = None

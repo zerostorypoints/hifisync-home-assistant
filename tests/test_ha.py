@@ -164,3 +164,50 @@ async def test_scope_loss_clears_saved_system_while_player_missing(hass, enable_
         assert entry.data['system_id'] is None
         assert entry.data['token'] == 'synthetic-token'
         assert entry.data['player_registry_id'] == player.id
+
+async def test_preview_url_used_for_setup_runtime_and_reconfigure(hass, enable_custom_integrations):
+    preview = 'https://hifisync-sample123-zerostorypoints.vercel.app'
+    class PreviewClient(FixtureClient):
+        async def _get(self, path):
+            assert self.base == preview + '/api/integrations/home-assistant/v1'
+            return await super()._get(path)
+
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'preview-player')
+    with patch('custom_components.hifisync.config_flow.Client', PreviewClient), patch('custom_components.hifisync.Client', PreviewClient):
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'user'})
+        selection = await hass.config_entries.flow.async_configure(flow['flow_id'], {'token':'synthetic-token', 'site_url':preview + '/'})
+        assert selection['step_id'] == 'select'
+        await hass.config_entries.flow.async_configure(flow['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        assert entry.state == config_entries.ConfigEntryState.LOADED
+        assert entry.data['site_url'] == preview
+        assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is not None
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'reconfigure', 'entry_id':entry.entry_id})
+        assert flow['step_id'] == 'select'
+        result = await hass.config_entries.flow.async_configure(flow['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        assert result['reason'] == 'reconfigure_successful'
+        assert entry.data['site_url'] == preview
+        entry.async_start_reauth(hass)
+        await hass.async_block_till_done()
+        reauth = next(flow for flow in hass.config_entries.flow.async_progress() if flow['context']['source']=='reauth')
+        result = await hass.config_entries.flow.async_configure(reauth['flow_id'], {'token':'synthetic-token'})
+        assert result['reason'] == 'reauth_successful'
+        assert entry.data['site_url'] == preview
+
+@pytest.mark.parametrize('bad_url', [
+    'http://hifisync-sample123-zerostorypoints.vercel.app',
+    'https://hifisync-sample123-zerostorypoints.vercel.app.example.com',
+    'https://hifisync-sample123-zerostorypoints.vercel.app@localhost',
+    'https://hifisync-sample123-zerostorypoints.vercel.app/extra',
+    'https://hifisync-sample123-zerostorypoints.vercel.app:443',
+    'https://example.com',
+    '/',
+])
+async def test_untrusted_url_never_receives_installation_token(hass, enable_custom_integrations, bad_url):
+    with patch('custom_components.hifisync.config_flow.Client') as client:
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'user'})
+        result = await hass.config_entries.flow.async_configure(flow['flow_id'], {'token':'synthetic-token', 'site_url':bad_url})
+        assert result['errors'] == {'site_url':'invalid_site_url'}
+        client.assert_not_called()

@@ -8,6 +8,8 @@ Use Home Assistant 2026.9.2 or newer and a registered `media_player` entity. Cre
 
 Once this repository has a published release, add its repository URL to HACS as a custom **Integration**, install HiFiSync, and restart Home Assistant. Until a release is published, copy this repository's `custom_components/hifisync` directory to `<config>/custom_components/hifisync` and restart. In **Settings → Devices & services → Add integration**, choose **HiFiSync**, enter the token, select an allowed system and a registered player. Pick the actual streaming integration when duplicate Cast or DLNA entries exist. A token whose scope is empty displays an explanation; update the grant and start setup again.
 
+To use HiFiSync Preview, set **HiFiSync site URL** to the official deployment's HTTPS origin and enter a token issued in that same Preview. Paste only the origin, such as `https://hifisync-<deployment>-zerostorypoints.vercel.app`, without a page URL, query or port. Leave the field blank to use the live HiFiSync service. This integration keeps the configured origin for refresh, **Configure** and reauthentication. To switch environments, remove this integration entry and add it again with the new origin and a token from that environment.
+
 The token is stored in the Home Assistant config entry. Its snapshot stays in memory and is exposed only through a local, player-scoped integration interface. The status sensor reports link readiness without room details. The integration sends no player identifiers, playback information, commands or changes to HiFiSync.
 
 ## Operations
