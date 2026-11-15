@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Połącz HiFiSync",
+        "data": {
+          "token": "Token instalacji HiFiSync",
+          "site_url": "Adres HiFiSync (opcjonalny)"
+        },
+        "data_description": {
+          "site_url": "Zostaw puste dla wersji produkcyjnej. Dla Preview wpisz adres HTTPS wdrożenia i użyj tokena wydanego w tym Preview."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Wymień token HiFiSync",
+        "data": {
+          "token": "Nowy token instalacji"
+        }
+      },
+      "select": {
+        "title": "Wybierz system i odtwarzacz",
+        "data": {
+          "system_id": "System HiFiSync",
+          "player_registry_id": "Zarejestrowany odtwarzacz"
+        }
+      }
+    },
+    "error": {
+      "invalid_site_url": "Wpisz adres HTTPS HiFiSync lub oficjalnego wdrożenia Preview, bez ścieżki i portu.",
+      "invalid_auth": "Token jest nieprawidłowy, unieważniony lub wygasł.",
+      "cannot_connect": "Nie udało się zweryfikować HiFiSync. Spróbuj ponownie."
+    },
+    "abort": {
+      "already_configured": "HiFiSync jest już skonfigurowany.",
+      "single_instance_allowed": "HiFiSync jest już skonfigurowany.",
+      "reauth_successful": "Zaktualizowano token.",
+      "reauth_required": "Wymień wygasły lub unieważniony token.",
+      "reconfigure_successful": "Zaktualizowano wybór.",
+      "no_systems": "Token nie udostępnia żadnego systemu. Zmień zakres dostępu i spróbuj ponownie.",
+      "no_players": "Dodaj odtwarzacz do Home Assistant i spróbuj ponownie.",
+      "selection_changed": "Wybrany system lub odtwarzacz jest już niedostępny.",
+      "cannot_connect": "Nie udało się połączyć z HiFiSync. Spróbuj ponownie."
+    }
+  }
+}

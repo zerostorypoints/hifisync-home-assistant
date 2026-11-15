@@ -1,0 +1,233 @@
+"""Exercise the integration inside a fresh Home Assistant instance."""
+import json
+from unittest.mock import patch
+import pytest
+from homeassistant import config_entries
+from homeassistant.helpers import entity_registry as er
+from custom_components.hifisync.client import Client
+from tests.test_core import SNAPSHOT
+
+pytestmark = pytest.mark.asyncio
+SYSTEM = SNAPSHOT['system']['id']
+
+class FixtureClient(Client):
+    async def _get(self, path):
+        assert self.token == 'synthetic-token'
+        if path == '/systems':
+            return {'expiresAt':'2099-01-01T00:00:00Z', 'systems':[{'id': SYSTEM, 'name':'Fixture', 'visibility':'private', 'roomName':None}]}
+        assert path == '/systems/' + SYSTEM
+        return {'expiresAt':'2099-01-01T00:00:00Z', 'snapshot':SNAPSHOT}
+
+async def test_setup_rename_and_replacement(hass, enable_custom_integrations):
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'player1', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', FixtureClient), patch('custom_components.hifisync.Client', FixtureClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        assert result['type'] == 'form'
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        assert result['step_id'] == 'select'
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        assert result['type'] == 'create_entry'
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        assert entry.state == config_entries.ConfigEntryState.LOADED
+        provider = hass.data['hifisync']['studio_snapshot_v1']
+        assert provider(player.entity_id)['snapshot']['system']['name'] == 'Stereo'
+        summary = hass.data['hifisync']['studio_link_v1']
+        hass.states.async_set(player.entity_id, 'idle')
+        expected = {'status': 'ready', 'systemName': 'Stereo', 'roomName': None}
+        assert summary(player.entity_id) == expected
+        renamed = registry.async_update_entity(player.entity_id, new_entity_id='media_player.renamed')
+        assert provider(renamed.entity_id) is not None
+        assert summary(renamed.entity_id) == expected
+        assert summary(player.entity_id) is None
+        registry.async_remove(renamed.entity_id)
+        replacement = registry.async_get_or_create('media_player', 'fixture', 'player2', suggested_object_id='renamed')
+        assert provider(replacement.entity_id) is None
+        assert summary(replacement.entity_id) is None
+
+async def test_missing_system_allows_reselection_without_reauth(hass, enable_custom_integrations):
+    from custom_components.hifisync.core import Missing
+    class DeletedClient(FixtureClient):
+        async def _get(self, path):
+            if path != '/systems': raise Missing()
+            return await super()._get(path)
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', DeletedClient), patch('custom_components.hifisync.Client', DeletedClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        assert entry.state == config_entries.ConfigEntryState.LOADED
+        assert entry.data['system_id'] is None
+        assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is None
+        assert hass.data['hifisync']['studio_link_v1'](player.entity_id) == {
+            'status': 'select_system', 'systemName': None, 'roomName': None,
+        }
+        assert not any(flow['context']['source'] == 'reauth' for flow in hass.config_entries.flow.async_progress())
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': 'reconfigure', 'entry_id': entry.entry_id})
+        assert result['step_id'] == 'select'
+
+async def test_unauthorized_starts_reauth_and_replacement_restores_selection(hass, enable_custom_integrations):
+    from custom_components.hifisync.core import Unauthorized
+    class RevokedClient(FixtureClient):
+        async def _get(self, path): raise Unauthorized()
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', FixtureClient), patch('custom_components.hifisync.Client', FixtureClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        cache = hass.data['hifisync'][entry.entry_id]; cache.api = RevokedClient(None, 'synthetic-token')
+        # Run the periodic callback through HA time tracking in separate tests; this exercises the actual refresh and auth flow.
+        await cache.refresh()
+        assert cache.status == 'reauth'
+        previous_summary = hass.data['hifisync']['studio_link_v1']
+        assert previous_summary(player.entity_id) == {
+            'status': 'reauth', 'systemName': None, 'roomName': None,
+        }
+        entry.async_start_reauth(hass)
+        await hass.async_block_till_done()
+        flows = [f for f in hass.config_entries.flow.async_progress() if f['context']['source'] == 'reauth']
+        assert len(flows) == 1
+        result = await hass.config_entries.flow.async_configure(flows[0]['flow_id'], {'token':'synthetic-token'})
+        assert result['reason'] == 'reauth_successful'
+        await hass.async_block_till_done()
+        assert entry.data['system_id'] == SYSTEM
+        assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is not None
+        summary = hass.data['hifisync']['studio_link_v1']
+        assert summary(player.entity_id) == {'status': 'ready', 'systemName': 'Stereo', 'roomName': None}
+        assert previous_summary(player.entity_id) is None
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert 'studio_link_v1' not in hass.data['hifisync']
+        assert summary(player.entity_id) is None
+
+async def test_token_form_masks_credential(hass, enable_custom_integrations):
+    from homeassistant.helpers.selector import TextSelector
+    result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+    validator = next(iter(result['data_schema'].schema.values()))
+    assert isinstance(validator, TextSelector)
+    assert validator.config['type'] == 'password'
+
+@pytest.mark.parametrize('missing_player', [False, True])
+async def test_scheduled_probe_detects_revocation_without_selection_or_player(hass, enable_custom_integrations, missing_player):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+    from custom_components.hifisync.core import Unauthorized, Missing
+    class MutableClient(FixtureClient):
+        revoked = False
+        deleted = not missing_player
+        async def _get(self, path):
+            if self.revoked: raise Unauthorized()
+            if path != '/systems' and self.deleted: raise Missing()
+            return await super()._get(path)
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', MutableClient), patch('custom_components.hifisync.Client', MutableClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        cache = hass.data['hifisync'][entry.entry_id]
+        if missing_player:
+            registry.async_remove(player.entity_id)
+            await hass.async_block_till_done()
+        else:
+            assert entry.data['system_id'] is None
+        cache.api.revoked = True
+        future = dt_util.utcnow() + timedelta(minutes=6)
+        cache.now = lambda: future
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert cache.status == 'reauth'
+        flows = [f for f in hass.config_entries.flow.async_progress() if f['context']['source'] == 'reauth']
+        assert len(flows) == 1
+
+async def test_scope_loss_clears_saved_system_while_player_missing(hass, enable_custom_integrations):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+    class ScopedClient(FixtureClient):
+        selected_available = True
+        async def _get(self, path):
+            if path == '/systems' and not self.selected_available:
+                return {'expiresAt': '2099-01-01T00:00:00Z', 'systems': []}
+            return await super()._get(path)
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'p', suggested_object_id='fixture')
+    with patch('custom_components.hifisync.config_flow.Client', ScopedClient), patch('custom_components.hifisync.Client', ScopedClient):
+        result = await hass.config_entries.flow.async_init('hifisync', context={'source': config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result['flow_id'], {'token':'synthetic-token'})
+        await hass.config_entries.flow.async_configure(result['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        cache = hass.data['hifisync'][entry.entry_id]
+        registry.async_remove(player.entity_id)
+        await hass.async_block_till_done()
+        future = dt_util.utcnow() + timedelta(minutes=6)
+        cache.now = lambda: future
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert entry.data['system_id'] == SYSTEM
+        cache.api.selected_available = False
+        future += timedelta(minutes=6)
+        async_fire_time_changed(hass, future)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert cache.status == 'select_player'
+        assert cache.system_id is None
+        assert entry.data['system_id'] is None
+        assert entry.data['token'] == 'synthetic-token'
+        assert entry.data['player_registry_id'] == player.id
+
+async def test_preview_url_used_for_setup_runtime_and_reconfigure(hass, enable_custom_integrations):
+    preview = 'https://hifisync-sample123-zerostorypoints.vercel.app'
+    class PreviewClient(FixtureClient):
+        async def _get(self, path):
+            assert self.base == preview + '/api/integrations/home-assistant/v1'
+            return await super()._get(path)
+
+    registry = er.async_get(hass)
+    player = registry.async_get_or_create('media_player', 'fixture', 'preview-player')
+    with patch('custom_components.hifisync.config_flow.Client', PreviewClient), patch('custom_components.hifisync.Client', PreviewClient):
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'user'})
+        selection = await hass.config_entries.flow.async_configure(flow['flow_id'], {'token':'synthetic-token', 'site_url':preview + '/'})
+        assert selection['step_id'] == 'select'
+        await hass.config_entries.flow.async_configure(flow['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        await hass.async_block_till_done()
+        entry = hass.config_entries.async_entries('hifisync')[0]
+        assert entry.state == config_entries.ConfigEntryState.LOADED
+        assert entry.data['site_url'] == preview
+        assert hass.data['hifisync']['studio_snapshot_v1'](player.entity_id) is not None
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'reconfigure', 'entry_id':entry.entry_id})
+        assert flow['step_id'] == 'select'
+        result = await hass.config_entries.flow.async_configure(flow['flow_id'], {'system_id':SYSTEM, 'player_registry_id':player.id})
+        assert result['reason'] == 'reconfigure_successful'
+        assert entry.data['site_url'] == preview
+        entry.async_start_reauth(hass)
+        await hass.async_block_till_done()
+        reauth = next(flow for flow in hass.config_entries.flow.async_progress() if flow['context']['source']=='reauth')
+        result = await hass.config_entries.flow.async_configure(reauth['flow_id'], {'token':'synthetic-token'})
+        assert result['reason'] == 'reauth_successful'
+        assert entry.data['site_url'] == preview
+
+@pytest.mark.parametrize('bad_url', [
+    'http://hifisync-sample123-zerostorypoints.vercel.app',
+    'https://hifisync-sample123-zerostorypoints.vercel.app.example.com',
+    'https://hifisync-sample123-zerostorypoints.vercel.app@localhost',
+    'https://hifisync-sample123-zerostorypoints.vercel.app/extra',
+    'https://hifisync-sample123-zerostorypoints.vercel.app:443',
+    'https://example.com',
+    '/',
+])
+async def test_untrusted_url_never_receives_installation_token(hass, enable_custom_integrations, bad_url):
+    with patch('custom_components.hifisync.config_flow.Client') as client:
+        flow = await hass.config_entries.flow.async_init('hifisync', context={'source':'user'})
+        result = await hass.config_entries.flow.async_configure(flow['flow_id'], {'token':'synthetic-token', 'site_url':bad_url})
+        assert result['errors'] == {'site_url':'invalid_site_url'}
+        client.assert_not_called()

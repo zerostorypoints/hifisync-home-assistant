@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect HiFiSync",
+        "data": {
+          "token": "HiFiSync installation token",
+          "site_url": "HiFiSync site URL (optional)"
+        },
+        "data_description": {
+          "site_url": "Leave blank for the live service. For a Preview installation enter its HTTPS deployment address and a token from that Preview."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Replace HiFiSync token",
+        "data": {
+          "token": "New installation token"
+        }
+      },
+      "select": {
+        "title": "Select system and player",
+        "data": {
+          "system_id": "HiFiSync system",
+          "player_registry_id": "Registered media player"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Token is invalid, revoked or expired.",
+      "cannot_connect": "Could not validate HiFiSync. Try again.",
+      "invalid_site_url": "Enter the HTTPS address of HiFiSync or an official HiFiSync Preview deployment, without a path or port."
+    },
+    "abort": {
+      "single_instance_allowed": "HiFiSync is already configured.",
+      "already_configured": "HiFiSync is already configured.",
+      "reauth_successful": "Token updated.",
+      "reauth_required": "Replace the expired or revoked token first.",
+      "reconfigure_successful": "Selection updated.",
+      "no_systems": "No systems are available in this token's scope. Update the grant and try again.",
+      "no_players": "No registered media players are available. Add a media player and try again.",
+      "selection_changed": "The selection is no longer available. Try again.",
+      "cannot_connect": "Could not reach HiFiSync. Try again."
+    }
+  }
+}
